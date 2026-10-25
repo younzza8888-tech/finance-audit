@@ -15,77 +15,58 @@ uploaded_file = st.file_uploader("전표 엑셀 파일 업로드 (.xls, .xlsx)",
 if uploaded_file is not None:
     with st.spinner('전표 데이터를 분석 중입니다...'):
         try:
-            # ------------------------------------------------------------------
-            # ERP별 데이터 로드 및 표준 규격 통일
-            # 표준 컬럼: ['일자', '전표번호', '차변계정', '금액', '적요', '거래처명']
-            # ------------------------------------------------------------------
+            # 엑셀 헤더 위치 동적 탐색 (상위 10행 내에서 '계정' 또는 '적요'가 있는 행 탐색)
+            df_preview = pd.read_excel(uploaded_file, header=None)
+            header_idx = 0
+            for i in range(min(10, len(df_preview))):
+                row_str = " ".join(df_preview.iloc[i].astype(str).tolist())
+                if any(k in row_str for k in ['계정과목', '차변', '적요', '구분']):
+                    header_idx = i
+                    break
+            
+            df_raw = pd.read_excel(uploaded_file, header=header_idx)
+            
+            # 열 이름 매핑 딕셔너리 생성 (열 개수가 몇 개이든 필요한 항목을 자동 추출)
+            col_idx = {}
+            for col in df_raw.columns:
+                c_str = str(col).strip().replace(" ", "")
+                if ('일자' in c_str or '년/월/일' in c_str) and '일자' not in col_idx:
+                    col_idx['일자'] = col
+                elif '번호' in c_str and '전표번호' not in col_idx:
+                    col_idx['전표번호'] = col
+                elif ('차변금액' in c_str or c_str == '금액' or c_str == '차변') and '차변금액' not in col_idx:
+                    col_idx['차변금액'] = col
+                elif ('차변계정' in c_str or '계정과목' in c_str or '계정명' in c_str) and '차변계정' not in col_idx:
+                    col_idx['차변계정'] = col
+                elif '적요' in c_str and '적요' not in col_idx:
+                    col_idx['적요'] = col
+                elif ('거래처명' in c_str or '거래처' in c_str) and '거래처명' not in col_idx:
+                    col_idx['거래처명'] = col
+
             clean_rows = []
-
-            if erp_type == "영림원 ERP":
-                # 영림원: 2번째 행이 헤더
-                df_raw = pd.read_excel(uploaded_file, header=1)
-                df_raw.columns = ['일자', '전표번호', '차변금액', '차변계정', '대변계정', '대변금액', '적요', '거래처코드', '거래처명', '결의일자', '결의번호', 'PJT코드', 'PJT명']
-                
-                for _, r in df_raw.iterrows():
-                    amt = pd.to_numeric(r['차변금액'], errors='coerce')
-                    if pd.notna(amt) and amt > 0:
-                        clean_rows.append({
-                            '일자': r['일자'],
-                            '전표번호': r['전표번호'],
-                            '차변계정': str(r['차변계정']),
-                            '금액': amt,
-                            '적요': str(r['적요']) if pd.notna(r['적요']) else '',
-                            '거래처명': str(r['거래처명']) if pd.notna(r['거래처명']) else ''
-                        })
-
-            else:
-                # 더존 ERP: 상단 헤더 위치 자동 탐색 및 컬럼 매핑
-                # 더존은 보통 헤더 행에 '계정과목' 또는 '계정명'이 들어있음
-                df_preview = pd.read_excel(uploaded_file, header=None)
-                header_idx = 0
-                for i in range(min(10, len(df_preview))):
-                    row_str = " ".join(df_preview.iloc[i].astype(str).tolist())
-                    if any(k in row_str for k in ['계정과목', '계정명', '차변', '적요']):
-                        header_idx = i
-                        break
-                
-                df_raw = pd.read_excel(uploaded_file, header=header_idx)
-                
-                # 컬럼 매핑 (더존의 다양한 표기 흡수)
-                col_map = {}
-                for c in df_raw.columns:
-                    c_clean = str(c).strip().replace(" ", "")
-                    if '일자' in c_clean or '날짜' in c_clean: col_map['일자'] = c
-                    elif '번호' in c_clean: col_map['전표번호'] = c
-                    elif '계정' in c_clean and '명' in c_clean: col_map['차변계정'] = c
-                    elif '계정과목' in c_clean: col_map['차변계정'] = c
-                    elif '차변' in c_clean or '차변금액' in c_clean: col_map['금액'] = c
-                    elif '적요' in c_clean: col_map['적요'] = c
-                    elif '거래처' in c_clean and '명' in c_clean: col_map['거래처명'] = c
-                    elif '거래처' in c_clean: col_map['거래처명'] = c
-
-                for _, r in df_raw.iterrows():
-                    amt = pd.to_numeric(r.get(col_map.get('금액')), errors='coerce')
-                    if pd.notna(amt) and amt > 0:
-                        clean_rows.append({
-                            '일자': r.get(col_map.get('일자'), ''),
-                            '전표번호': r.get(col_map.get('전표번호'), '-'),
-                            '차변계정': str(r.get(col_map.get('차변계정'), '')),
-                            '금액': amt,
-                            '적요': str(r.get(col_map.get('적요'), '')),
-                            '거래처명': str(r.get(col_map.get('거래처명'), ''))
-                        })
+            for _, r in df_raw.iterrows():
+                # 차변금액 추출
+                amt = pd.to_numeric(r.get(col_idx.get('차변금액')), errors='coerce')
+                if pd.notna(amt) and amt > 0:
+                    clean_rows.append({
+                        '일자': r.get(col_idx.get('일자'), ''),
+                        '전표번호': r.get(col_idx.get('전표번호'), '-'),
+                        '차변계정': str(r.get(col_idx.get('차변계정'), '')),
+                        '금액': amt,
+                        '적요': str(r.get(col_idx.get('적요'), '')) if pd.notna(r.get(col_idx.get('적요'))) else '',
+                        '거래처명': str(r.get(col_idx.get('거래처명'), '')) if pd.notna(r.get(col_idx.get('거래처명'))) else ''
+                    })
 
             df = pd.DataFrame(clean_rows)
             df['일자'] = pd.to_datetime(df['일자'], errors='coerce')
             df['요일'] = df['일자'].dt.dayofweek
 
             # ------------------------------------------------------------------
-            # 공통 감사 규칙 엔진 (규정 검증)
+            # 공통 감사 규칙 엔진 (사내 규정 검증)
             # ------------------------------------------------------------------
             audit_results = []
 
-            # 1. 주말 집행 의심건 (회의비, 접대비, 복리후생비, 여비교통비)
+            # 1. 주말 집행 의심건 (토/일요일 결제)
             weekend_mask = (df['요일'] >= 5) & df['차변계정'].str.contains('회의비|접대비|복리후생비|여비교통비')
             for _, row in df[weekend_mask].iterrows():
                 audit_results.append({
@@ -110,7 +91,7 @@ if uploaded_file is not None:
                     '거래처명': row['거래처명'],
                     '적요': row['적요'],
                     '위험도': 'HIGH',
-                    '검토의견': '10만원 초과 건으로 회의비가 아닌 접대비 계정 처리 필요'
+                    '검토의견': '1회 10만원 초과 건으로 회의비가 아닌 접대비 계정 처리 필요'
                 })
 
             under_100k = df[df['차변계정'].str.contains('접대비') & (df['금액'] <= 100000)]
@@ -170,11 +151,11 @@ if uploaded_file is not None:
                 st.download_button(
                     label="📥 이상 징후 리포트 엑셀 다운로드",
                     data=buffer.getvalue(),
-                    file_name=f"{erp_type[:3]}_전표검토결과.xlsx",
+                    file_name="전표검토결과.xlsx",
                     mime="application/vnd.ms-excel"
                 )
             else:
-                st.info("선택하신 ERP 전표에서 규정 위반 의심 건이 발견되지 않았습니다.")
+                st.info("선택하신 전표 파일에서 규정 위반 의심 건이 발견되지 않았습니다.")
 
         except Exception as e:
             st.error(f"파일을 분석하는 중 오류가 발생했습니다. 양식이 올바른지 확인해주세요. (상세 에러: {e})")
