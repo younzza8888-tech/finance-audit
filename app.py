@@ -15,46 +15,53 @@ uploaded_file = st.file_uploader("전표 엑셀 파일 업로드 (.xls, .xlsx)",
 if uploaded_file is not None:
     with st.spinner('전표 데이터를 분석 중입니다...'):
         try:
-            # 엑셀 헤더 위치 동적 탐색 (상위 10행 내에서 '계정' 또는 '적요'가 있는 행 탐색)
+            # 엑셀 헤더 위치 탐색 (모든 셀을 안전하게 문자열로 변환하여 에러 방지)
             df_preview = pd.read_excel(uploaded_file, header=None)
+            
             header_idx = 0
             for i in range(min(10, len(df_preview))):
-                row_str = " ".join(df_preview.iloc[i].astype(str).tolist())
-                if any(k in row_str for k in ['계정과목', '차변', '적요', '구분']):
+                row_str = " ".join([str(val) for val in df_preview.iloc[i].tolist() if pd.notna(val)])
+                if any(k in row_str for k in ['계정과목', '거래처명', '적요', '년/월/일']):
                     header_idx = i
                     break
             
+            # 탐색한 헤더 위치 기준으로 데이터 로드
             df_raw = pd.read_excel(uploaded_file, header=header_idx)
             
-            # 열 이름 매핑 딕셔너리 생성 (열 개수가 몇 개이든 필요한 항목을 자동 추출)
-            col_idx = {}
-            for col in df_raw.columns:
+            # 열 이름 매핑 딕셔너리 구성
+            date_col = None
+            slip_col = None
+            amt_col = None
+            acc_col = None
+            desc_col = None
+            cust_col = None
+
+            for idx, col in enumerate(df_raw.columns):
                 c_str = str(col).strip().replace(" ", "")
-                if ('일자' in c_str or '년/월/일' in c_str) and '일자' not in col_idx:
-                    col_idx['일자'] = col
-                elif '번호' in c_str and '전표번호' not in col_idx:
-                    col_idx['전표번호'] = col
-                elif ('차변금액' in c_str or c_str == '금액' or c_str == '차변') and '차변금액' not in col_idx:
-                    col_idx['차변금액'] = col
-                elif ('차변계정' in c_str or '계정과목' in c_str or '계정명' in c_str) and '차변계정' not in col_idx:
-                    col_idx['차변계정'] = col
-                elif '적요' in c_str and '적요' not in col_idx:
-                    col_idx['적요'] = col
-                elif ('거래처명' in c_str or '거래처' in c_str) and '거래처명' not in col_idx:
-                    col_idx['거래처명'] = col
+                if not date_col and any(k in c_str for k in ['일자', '년/월/일', '날짜']):
+                    date_col = col
+                elif not slip_col and '번호' in c_str:
+                    slip_col = col
+                elif not amt_col and any(k in c_str for k in ['차변금액', '금액', '차변']):
+                    amt_col = col
+                elif not acc_col and any(k in c_str for k in ['차변계정', '계정과목', '계정명']):
+                    acc_col = col
+                elif not desc_col and '적요' in c_str:
+                    desc_col = col
+                elif not cust_col and ('거래처명' in c_str or '거래처' in c_str):
+                    cust_col = col
 
             clean_rows = []
             for _, r in df_raw.iterrows():
-                # 차변금액 추출
-                amt = pd.to_numeric(r.get(col_idx.get('차변금액')), errors='coerce')
+                amt = pd.to_numeric(r.get(amt_col), errors='coerce') if amt_col else 0
                 if pd.notna(amt) and amt > 0:
                     clean_rows.append({
-                        '일자': r.get(col_idx.get('일자'), ''),
-                        '전표번호': r.get(col_idx.get('전표번호'), '-'),
-                        '차변계정': str(r.get(col_idx.get('차변계정'), '')),
+                        '일자': r.get(date_col, ''),
+                        '전표번호': r.get(slip_col, '-'),
+                        '차변계정': str(r.get(acc_col, '')),
                         '금액': amt,
-                        '적요': str(r.get(col_idx.get('적요'), '')) if pd.notna(r.get(col_idx.get('적요'))) else '',
-                        '거래처명': str(r.get(col_idx.get('거래처명'), '')) if pd.notna(r.get(col_idx.get('거래처명'))) else ''
+                        '적요': str(r.get(desc_col, '')) if pd.notna(r.get(desc_col)) else '',
+                        '거래처명': str(r.get(cust_col, '')) if pd.notna(r.get(cust_col)) else ''
                     })
 
             df = pd.DataFrame(clean_rows)
@@ -138,7 +145,7 @@ if uploaded_file is not None:
                     })
 
             # 결과 화면 출력
-            st.success(f"검토 완료! 총 {len(df)}건 중 {len(audit_results)}건의 이상 징후가 발견되었습니다.")
+            st.success(f"검토 완료! 총 {len(df)}건의 유효 전표 중 {len(audit_results)}건의 이상 징후가 발견되었습니다.")
 
             if len(audit_results) > 0:
                 result_df = pd.DataFrame(audit_results)
